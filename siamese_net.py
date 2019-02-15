@@ -1,6 +1,4 @@
 import random
-from glob import glob
-from random import randint
 
 import numpy as np
 import tensorflow as tf
@@ -10,15 +8,12 @@ from data_loader import Loader
 
 class SiameseNet:
 
-    def __init__(self, data_path, lr, seed=None):
+    def __init__(self, data_path, inception_path, lr, seed=None):
         if seed is not None:
             self._determinize_model(seed)
         self._assemble_graph(lr)
         self._open_session()
-        self.data_path = data_path + '/'
-        self.images_mat = [glob(x + "/*") for x in glob(data_path + "/*")]
-        self.idxs = [0] * len(self.images_mat)
-        self.loader = Loader()
+        self.loader = Loader(data_path, inception_path)
 
     @staticmethod
     def _model(input_):
@@ -45,10 +40,10 @@ class SiameseNet:
 
     def train(self, epochs=10, minibatch_size=256, alpha=0.2, thresh=-0.8):
         self.sess.run(tf.global_variables_initializer())
-        import pandas as pd
-        test_data = pd.read_csv('data/test_set.csv')
+        test_anc_batch, test_pos_batch, test_neg_batch = self.loader.get_test_batches()
+
         for epoch in range(epochs):
-            anc_batches, pos_batches, neg_batches = self._get_next_batch(minibatch_size)
+            anc_batches, pos_batches, neg_batches = self.loader.get_next_batch(minibatch_size)
             for anc_batch, pos_batch, neg_batch \
                     in zip(anc_batches, pos_batches, neg_batches):
                 loss, _ = self.sess.run([self.loss, self.train_op],
@@ -56,12 +51,7 @@ class SiameseNet:
                                                    self.input_pos: pos_batch,
                                                    self.input_neg: neg_batch,
                                                    self.alpha: alpha})
-            test_anc_batch = self.loader.load_preprocess_images(
-                test_data['Anchor'].values, self.data_path)
-            test_pos_batch = self.loader.load_preprocess_images(
-                test_data['Positive'].values, self.data_path)
-            test_neg_batch = self.loader.load_preprocess_images(
-                test_data['Negative'].values, self.data_path)
+
             accuracy, test_loss = self._evaluate(test_anc_batch,
                                                  test_pos_batch,
                                                  test_neg_batch,
@@ -81,33 +71,6 @@ class SiameseNet:
         different_acc = np.where(different <= -1 * thresh, 0, 1)
         acc = np.append(same_acc, different_acc)
         return acc.mean(), loss
-
-    def _get_next_batch(self, minibatch_sz):
-        dirs_len = len(self.images_mat)
-        anc_batch = []
-        pos_batch = []
-        neg_batch = []
-        for i in range(dirs_len):
-            images = self.images_mat[i]
-            length = len(images)
-            if length < 2:
-                continue
-            anc_batch.append(images[self.idxs[i]])
-            pos_batch.append(images[(self.idxs[i] + 1) % length])
-            self.idxs[i] = (self.idxs[i] + 1) % length
-            rand_class = i
-            while (len(self.images_mat[rand_class]) == 0) or (rand_class == i):
-                rand_class = randint(0, dirs_len - 1)
-            neg_batch.append(self.images_mat[rand_class][self.idxs[rand_class]])
-
-        def divide(x):
-            len_x = len(x)
-            return [x[j: min(j + minibatch_sz, len_x)]
-                    for j in range(0, len_x, minibatch_sz)]
-
-        return divide(self.loader.load_preprocess_images(anc_batch)), \
-               divide(self.loader.load_preprocess_images(pos_batch)), \
-               divide(self.loader.load_preprocess_images(neg_batch))
 
     def _open_session(self):
         self.sess = tf.Session()
